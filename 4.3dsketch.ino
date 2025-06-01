@@ -1,117 +1,74 @@
+#define USING_TIMER_TC3 true
+
+#include <SAMDTimerInterrupt.h>
 #include <Wire.h>
 #include <BH1750.h>
-#include <DHT.h>
 
-// Pin definitions
-#define BUTTON_PIN 2
-#define LED1_PIN 3
-#define LED2_PIN 4
-#define LED3_PIN 5
-#define DHT_PIN 6
+SAMDTimer ITimer(TIMER_TC3);
 
-// Sensor objects
-BH1750 lightMeter;
-DHT dht(DHT_PIN, DHT11);
+#define BUTTON_PIN     2  // External Interrupt
+#define PIR_PIN        3  // External Interrupt
+#define LED_BUTTON     5
+#define LED_PIR        6
+#define LED_TIMER      7
 
-// Variables for interrupt flags
-volatile bool buttonPressed = false;
-volatile bool lightThresholdExceeded = false;
-volatile bool tempThresholdExceeded = false;
+BH1750 lightSensor;
 
-// Variables for timer functionality
-unsigned long previousMillis = 0;
-const long interval = 1000; // 1 second interval
+volatile bool buttonState = false;
+volatile bool pirState = false;
+volatile bool timerFlag = false;
 
-// Threshold values
-const float LIGHT_THRESHOLD = 200.0; // Lux
-const float TEMP_THRESHOLD = 28.0;   // °C
+// Interrupt Service Routines
+void handleButtonInterrupt() {
+  buttonState = !buttonState;
+  digitalWrite(LED_BUTTON, buttonState);
+  Serial.println("Button interrupt: LED1 toggled");
+}
+
+void handlePIRInterrupt() {
+  pirState = !pirState;
+  digitalWrite(LED_PIR, pirState);
+  Serial.println("PIR interrupt: LED2 toggled");
+}
+
+// Timer ISR - called every 1000ms
+void TimerHandler() {
+  digitalWrite(LED_TIMER, !digitalRead(LED_TIMER));
+  timerFlag = true;  // Used to print sensor data from loop()
+}
 
 void setup() {
-  Serial.begin(9600);
-  while (!Serial); // Wait for serial to initialize
-  
-  // Initialize pins
+  Serial.begin(115200);
+  delay(1000);
+
+  // Use internal pull-up for the button pin
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED1_PIN, OUTPUT);
-  pinMode(LED2_PIN, OUTPUT);
-  pinMode(LED3_PIN, OUTPUT);
-  
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LED_BUTTON, OUTPUT);
+  pinMode(LED_PIR, OUTPUT);
+  pinMode(LED_TIMER, OUTPUT);
 
-  
-  // Attach interrupts
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
-  
-  // Initialize sensors
+  // Interrupt on FALLING edge because button pulls pin LOW when pressed
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIR_PIN), handlePIRInterrupt, RISING);
+
   Wire.begin();
-  lightMeter.begin();
-  dht.begin();
-  
-  Serial.println("System initialized");
-}
+  lightSensor.begin();
 
+  // Timer setup: 1 second (1000 ms)
+  if (ITimer.attachInterruptInterval(1000000, TimerHandler)) {
+    Serial.println("Timer interrupt started (1s interval)");
+  }
+
+  Serial.println("System Initialized");
+}
 
 void loop() {
-  unsigned long currentMillis = millis();
-  
-  // Timer-based actions (every 'interval' milliseconds)
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    
-    // Read sensors
-    float lux = lightMeter.readLightLevel();
-    float temp = dht.readTemperature();
-    
-    // Check light threshold
-    if (lux > LIGHT_THRESHOLD) {
-      lightThresholdExceeded = true;
-    }
-    
-    // Check temperature threshold
-    if (!isnan(temp) && temp > TEMP_THRESHOLD) {
-      tempThresholdExceeded = true;
-    }
-    
-    // Toggle LED3 (timer-controlled)
-    digitalWrite(LED3_PIN, !digitalRead(LED3_PIN));
-    
-    // Log sensor readings
-    Serial.print("Light: ");
+  if (timerFlag) {
+    timerFlag = false;
+    float lux = lightSensor.readLightLevel();
+    Serial.print("Light sensor reading (BH1750): ");
     Serial.print(lux);
-    Serial.print(" lux | Temp: ");
-    Serial.print(temp);
-    Serial.println(" °C");
+    Serial.println(" lx");
   }
-
-  
-  // Handle button interrupt
-  if (buttonPressed) {
-    buttonPressed = false;
-    digitalWrite(LED1_PIN, !digitalRead(LED1_PIN));
-    Serial.println("Button pressed - LED1 toggled");
-  }
-  
-  // Handle light sensor threshold
-  if (lightThresholdExceeded) {
-    lightThresholdExceeded = false;
-    digitalWrite(LED2_PIN, !digitalRead(LED2_PIN));
-    Serial.println("Light threshold exceeded - LED2 toggled");
-  }
-  
-  // Handle temperature threshold
-  if (tempThresholdExceeded) {
-    tempThresholdExceeded = false;
-    Serial.println("Temperature threshold exceeded");
-  }
-}
-
-// Button interrupt service routine
-void buttonISR() {
-  static unsigned long lastInterruptTime = 0;
-  unsigned long interruptTime = millis();
-  
-  // Debounce - ignore interrupts faster than 200ms
-  if (interruptTime - lastInterruptTime > 200) {
-    buttonPressed = true;
-  }
-  lastInterruptTime = interruptTime;
 }
